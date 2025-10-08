@@ -1,6 +1,7 @@
 ﻿using ManagedCuda;
 using ManagedCuda.BasicTypes;
 using ManagedCuda.NVRTC;
+using ManagedCuda.VectorTypes;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -457,13 +458,33 @@ namespace LocalCudaWorkerService.Runtime
 			return this.Kernel;
 		}
 
+		internal CudaKernel? CompileLoadKernelFromString(string kernelCode)
+		{
+			// Precompile kernel string (check for validity and get name)
+			string? kernelName = this.PrecompileKernelString(kernelCode, false);
+			if (string.IsNullOrEmpty(kernelName))
+			{
+				return null;
+			}
+
+			// Compile kernel string
+			string? ptxPath = this.CompileString(kernelCode, false);
+			if (ptxPath == null)
+			{
+				return null;
+			}
+
+			// Load kernel
+			return this.LoadKernel(kernelName ?? "", false);
+		}
+
 
 		// Argument extraction
 		// Hilfsfunktion zum Entfernen von Modifizierern
 		private static string RemoveTypeModifiers(string typeName)
 		{
 			// Liste der zu entfernenden Modifizierer
-			string[] modifiers = { "const", "__restrict__", "restrict", "__restrict", "__const__", "__volatile__", "volatile" };
+			string[] modifiers = ["const", "__restrict__", "restrict", "__restrict", "__const__", "__volatile__", "volatile"];
 			var parts = typeName.Split(' ', StringSplitOptions.RemoveEmptyEntries)
 								.Where(p => !modifiers.Contains(p))
 								.ToArray();
@@ -474,10 +495,6 @@ namespace LocalCudaWorkerService.Runtime
 		{
 			string typeIdentifier = RemoveTypeModifiers(typeName).Split(' ').LastOrDefault()?.Trim() ?? "object";
 			bool isPointer = typeIdentifier.EndsWith("*");
-			if (isPointer)
-			{
-				typeIdentifier = typeIdentifier.TrimEnd('*').Trim();
-			}
 
 			Type type = typeIdentifier switch
 			{
@@ -496,7 +513,18 @@ namespace LocalCudaWorkerService.Runtime
 
 			if (isPointer)
 			{
-				type = typeof(IntPtr);
+				// Get pointer type from identifier DO NOT JUST RETURN INTPTR
+				type = typeIdentifier.ToLower() switch
+				{
+					"int*" => typeof(int*),
+					"float*" => typeof(float*),
+					"double*" => typeof(double*),
+					"char*" => typeof(char*),
+					"bool*" => typeof(bool*),
+					"byte*" => typeof(byte*),
+					"float2*" => typeof(float2*),
+					_ => typeof(void*)
+				};
 			}
 
 			return type;
@@ -525,7 +553,9 @@ namespace LocalCudaWorkerService.Runtime
 			};
 
 			if (isPointer)
+			{
 				typeString += "*";
+			}
 
 			return typeString;
 		}

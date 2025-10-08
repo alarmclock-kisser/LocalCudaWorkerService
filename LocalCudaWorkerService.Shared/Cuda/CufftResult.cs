@@ -6,9 +6,16 @@ using System.Threading.Tasks;
 
 namespace LocalCudaWorkerService.Shared.Cuda
 {
-	public class CufftResult
+	public class CuFftResult
 	{
 		public IEnumerable<object[]> DataChunks { get; set; } = [];
 		public string DataForm { get; set; } = "f";
+
+		public string? ErrorMessage { get; set; } = null;
+
+		public CuFftResult()
+		{
+			// Empty ctor
+		}
 	}
 }

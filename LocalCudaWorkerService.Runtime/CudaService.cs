@@ -146,7 +146,11 @@ namespace LocalCudaWorkerService.Runtime
 		// Thread privates
 		private void StartGpuThread()
 		{
-			if (this.gpuRunning) return;
+			if (this.gpuRunning)
+			{
+				return;
+			}
+
 			this.gpuRunning = true;
 			this._gpuThread = new Thread(() =>
 			{
@@ -1257,7 +1261,9 @@ namespace LocalCudaWorkerService.Runtime
 			=> await this.EnqueueGpu(() => this.ExecuteAudioKernel(obj, kernel, chunkSize, overlap, argNames, argValues, autoNormalize));
 
 
-		public async Task<string?> ExecuteGenericKernelAsyncSafe(string kernelCode, string? inputDataBase64 = null, string? inputDataType = null, string outputDataLength = "0", string? outputDataType = null, Dictionary<string, string>? parameters = null, int workDimension = 1)
+
+
+		internal async Task<string?> ExecuteGenericKernelAsyncSafe(string kernelCode, string? inputDataBase64 = null, string? inputDataType = null, string outputDataLength = "0", string? outputDataType = null, Dictionary<string, string>? parameters = null, int workDimension = 1, string? onCudaDevice = "NVIDIA")
 		{
 			// Try compile code
 			var compileResult = this.Compiler?.CompileString(kernelCode);
@@ -1267,51 +1273,307 @@ namespace LocalCudaWorkerService.Runtime
 				return compileResult;
 			}
 
-			// Parse output data length and try get types
-			long outLength = long.TryParse(outputDataLength, out long len) ? len : 0;
-			Type? outType = outputDataType?.ToLower().Trim() switch
+			if (!this.Initialized)
 			{
-				"byte" or "uint8" or "uchar" => typeof(byte),
-				"sbyte" or "int8" => typeof(sbyte),
-				"short" or "int16" => typeof(short),
-				"ushort" or "uint16" => typeof(ushort),
-				"int" or "int32" => typeof(int),
-				"uint" or "uint32" => typeof(uint),
-				"long" or "int64" => typeof(long),
-				"ulong" or "uint64" => typeof(ulong),
-				"float" or "float32" => typeof(float),
-				"double" or "float64" => typeof(double),
-				_ => null,
-			};
-			Type? inType = inputDataType?.ToLower().Trim() switch
+				if (!string.IsNullOrEmpty(onCudaDevice))
+				{
+					this.Initialize(onCudaDevice);
+				}
+				
+				if (!this.Initialized)
+				{
+					Log("CUDA Service not initialized.", "", 0, "CUDA-Service", true);
+					return null;
+				}
+			}
+
+			if (this.Executioner == null || this.Compiler == null || this.Register == null)
 			{
-				"byte" or "uint8" or "uchar" => typeof(byte),
-				"sbyte" or "int8" => typeof(sbyte),
-				"short" or "int16" => typeof(short),
-				"ushort" or "uint16" => typeof(ushort),
-				"int" or "int32" => typeof(int),
-				"uint" or "uint32" => typeof(uint),
-				"long" or "int64" => typeof(long),
-				"ulong" or "uint64" => typeof(ulong),
-				"float" or "float32" => typeof(float),
-				"double" or "float64" => typeof(double),
-				_ => null,
-			};
-
-			// Convert input data if given as typed array
-			object[]? inputData = !string.IsNullOrEmpty(inputDataBase64) && !string.IsNullOrEmpty(inputDataType)
-				? await ConvertStringToTypeAsync(inputDataBase64, inputDataType)
-				: null;
+				Console.WriteLine("CL-SER | ExecuteGenericDataKernel #000: OpenCL-Services not initialized.");
+				return null;
+			}
 
 
+			// Input-Daten dekodieren (falls vorhanden)
+			object[]? typedData = null;
+			if (!string.IsNullOrWhiteSpace(inputDataBase64) && !string.IsNullOrWhiteSpace(inputDataType))
+			{
+				switch (inputDataType.ToLowerInvariant())
+				{
+					case "double":
+						typedData = (await ConvertStringToTypeAsync<double>(inputDataBase64)).Cast<object>().ToArray();
+						break;
+					case "float":
+					case "single":
+						typedData = (await ConvertStringToTypeAsync<float>(inputDataBase64)).Cast<object>().ToArray();
+						break;
+					case "int":
+					case "int32":
+						typedData = (await ConvertStringToTypeAsync<int>(inputDataBase64)).Cast<object>().ToArray();
+						break;
+					case "byte":
+					case "uint8":
+						typedData = (await ConvertStringToTypeAsync<byte>(inputDataBase64)).Cast<object>().ToArray();
+						break;
+					default:
+						Console.WriteLine("CL-SER | Unsupported inputDataType: " + inputDataType);
+						break;
+				}
+			}
+
+			long outputLength = long.TryParse(outputDataLength, out long len) ? len : 0;
+			if (outputLength <= 0)
+			{
+				outputLength = int.TryParse(outputDataLength, out int intLen) ? intLen : 0;
+			}
+			if (outputLength <= 0 && typedData != null)
+			{
+				outputLength = typedData.LongLength;
+			}
+			if (outputLength <= 0)
+			{
+				Console.WriteLine("CL-SER | ExecuteGenericDataKernel #005: Invalid output length.");
+				return null;
+			}
+
+			object[]? data = null;
+
+			// Kernel ausführen je nach Output-Typ
+			switch (outputDataType?.ToLowerInvariant())
+			{
+				case "int":
+				case "int32":
+					{
+						data = (await this.Executioner.ExecuteGenericKernelSingleAsync<int>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)).Cast<object>().ToArray();
+						break;
+					}
+				case "double":
+					{
+						data = (await this.Executioner.ExecuteGenericKernelSingleAsync<double>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)).Cast<object>().ToArray();
+						break;
+					}
+				case "float":
+				case "single":
+					{
+						data = (await this.Executioner.ExecuteGenericKernelSingleAsync<float>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)).Cast<object>().ToArray();
+						break;
+					}
+				case "byte":
+				case "bytes":
+				case "uint8":
+					{
+						data = (await this.Executioner.ExecuteGenericKernelSingleAsync<byte>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)).Cast<object>().ToArray();
+						break;
+					}
+				default:
+					Console.WriteLine("CL-SER | ExecuteGenericDataKernel #006: Unsupported outputDataType: " + outputDataType);
+					return null;
+			}
 
 			// 
-
-
-
-
-			return null;
+			var byteData = new byte[data.Length * sizeof(int)];
+			Buffer.BlockCopy(data, 0, byteData, 0, byteData.Length);
+			return Convert.ToBase64String(byteData);
 		}
+
+		// NEU: Wirklich thread-/context-sichere Variante
+		public Task<string?> ExecuteGenericKernelSingleAsyncSafe(string kernelCode,
+			string? inputDataBase64 = null, string? inputDataType = null, string outputDataLength = "0", string? outputDataType = null,
+			Dictionary<string, string>? parameters = null, int workDimension = 1, string? onCudaDevice = "NVIDIA")
+		{
+			return this.EnqueueGpu(() =>
+			{
+				this.EnsureContextCurrent();
+
+				// (1) Initialisierung falls nötig
+				if (!this.Initialized)
+				{
+					if (!string.IsNullOrEmpty(onCudaDevice))
+					{
+						try { this.Initialize(onCudaDevice); }
+						catch (Exception ex)
+						{
+							Log(ex, "Auto-Initialize failed", 0, "CUDA-Service", true);
+							return (string?) null;
+						}
+					}
+					if (!this.Initialized)
+					{
+						Log("CUDA Service not initialized.", "", 0, "CUDA-Service", true);
+						return (string?) null;
+					}
+				}
+
+				if (this.Executioner == null || this.Compiler == null || this.Register == null)
+				{
+					Console.WriteLine("CUDA-SER | ExecuteGenericKernelSafe #000: Services not ready.");
+					return (string?) null;
+				}
+
+				// (2) Kompilieren / Laden im GPU-Thread
+				var compileResult = this.Compiler.CompileString(kernelCode);
+				if (string.IsNullOrEmpty(compileResult) || compileResult.Contains(' '))
+				{
+					Log("Kernel compilation failed.", "'" + compileResult + "'", 0, "CUDA-Service", true);
+					return compileResult;
+				}
+
+				// (3) Input dekodieren
+				object[]? typedData = null;
+				if (!string.IsNullOrWhiteSpace(inputDataBase64) && !string.IsNullOrWhiteSpace(inputDataType))
+				{
+					try
+					{
+						switch (inputDataType.ToLowerInvariant())
+						{
+							case "double":
+								typedData = ConvertStringToTypeAsync<double>(inputDataBase64).GetAwaiter().GetResult().Cast<object>().ToArray();
+								break;
+							case "float":
+							case "single":
+								typedData = ConvertStringToTypeAsync<float>(inputDataBase64).GetAwaiter().GetResult().Cast<object>().ToArray();
+								break;
+							case "int":
+							case "int32":
+								typedData = ConvertStringToTypeAsync<int>(inputDataBase64).GetAwaiter().GetResult().Cast<object>().ToArray();
+								break;
+							case "byte":
+							case "uint8":
+								typedData = ConvertStringToTypeAsync<byte>(inputDataBase64).GetAwaiter().GetResult().Cast<object>().ToArray();
+								break;
+							default:
+								Console.WriteLine("CUDA-SER | Unsupported inputDataType: " + inputDataType);
+								break;
+						}
+					}
+					catch (Exception ex)
+					{
+						Log(ex, "Input decode failed", 0, "CUDA-Service", true);
+						return (string?) null;
+					}
+				}
+
+				// (4) Outputlänge bestimmt
+				long outputLength = ParsePositiveLength(outputDataLength);
+				if (outputLength <= 0 && typedData != null)
+				{
+					outputLength = typedData.LongLength;
+				}
+				if (outputLength <= 0)
+				{
+					Console.WriteLine($"CL-SER | ExecuteGenericDataKernel #005: Invalid output length. Raw='{outputDataLength}'");
+					return (string?) null;
+				}
+
+				if (string.IsNullOrWhiteSpace(outputDataType))
+				{
+					Console.WriteLine("CL-SER | ExecuteGenericDataKernel #006: Missing outputDataType.");
+					return (string?) null;
+				}
+
+				object[]? dataObjects;
+
+				try
+				{
+					switch (outputDataType.ToLowerInvariant())
+					{
+						case "int":
+						case "int32":
+							dataObjects = this.Executioner
+								.ExecuteGenericKernelSingle<int>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)
+								.Cast<object>().ToArray();
+							break;
+						case "double":
+							dataObjects = this.Executioner
+								.ExecuteGenericKernelSingle<double>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)
+								.Cast<object>().ToArray();
+							break;
+						case "float":
+						case "single":
+							dataObjects = this.Executioner
+								.ExecuteGenericKernelSingle<float>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)
+								.Cast<object>().ToArray();
+							break;
+						case "byte":
+						case "bytes":
+						case "uint8":
+							dataObjects = this.Executioner
+								.ExecuteGenericKernelSingle<byte>(kernelCode, typedData, inputDataType, outputLength, parameters, workDimension)
+								.Cast<object>().ToArray();
+							break;
+						default:
+							Console.WriteLine("CL-SER | ExecuteGenericDataKernel #007: Unsupported outputDataType: " + outputDataType);
+							return (string?) null;
+					}
+				}
+				catch (Exception ex)
+				{
+					Log(ex, "Kernel execution failed", 0, "CUDA-Service", true);
+					return (string?) null;
+				}
+
+				if (dataObjects == null || dataObjects.Length == 0)
+				{
+					return (string?) null;
+				}
+
+				// (5) In Base64 serialisieren mit richtiger Elementgröße
+				int elemSize = GetElementSize(outputDataType);
+				byte[] raw = new byte[dataObjects.Length * elemSize];
+
+				// Boxed Array -> konkretes Array für BlockCopy
+				switch (outputDataType.ToLowerInvariant())
+				{
+					case "int":
+					case "int32":
+						Buffer.BlockCopy(dataObjects.Cast<int>().ToArray(), 0, raw, 0, raw.Length);
+						break;
+					case "float":
+					case "single":
+						Buffer.BlockCopy(dataObjects.Cast<float>().ToArray(), 0, raw, 0, raw.Length);
+						break;
+					case "double":
+						Buffer.BlockCopy(dataObjects.Cast<double>().ToArray(), 0, raw, 0, raw.Length);
+						break;
+					case "byte":
+					case "bytes":
+					case "uint8":
+						raw = dataObjects.Cast<byte>().ToArray();
+						break;
+				}
+
+				return Convert.ToBase64String(raw);
+			});
+		}
+
+		public async Task<string[]?> ExecuteGenericKernelBatchAsyncSafe(string kernelCode,
+			string[]? inputDataBase64 = null, string? inputDataType = null, string outputDataLength = "0", string? outputDataStride = "1", string? outputDataType = null,
+			Dictionary<string, string>? parameters = null, int workDimension = 1, string? onCudaDevice = "NVIDIA")
+		{
+			int stride = (int) ParsePositiveLength(outputDataStride);
+			if (stride <= 0)
+			{
+				stride = 1;
+			}
+
+			List<string> results = [];
+			for (int i = 0; i < stride; i++)
+			{
+				string? inputData = null;
+				if (inputDataBase64 != null && i < inputDataBase64.Length)
+				{
+					inputData = inputDataBase64[i];
+				}
+
+				var res = await this.ExecuteGenericKernelSingleAsyncSafe(kernelCode, inputData, inputDataType, outputDataLength, outputDataType, parameters, workDimension, onCudaDevice);
+				
+				results.Add(res ?? "");
+			}
+
+			return results.ToArray();
+		}
+
+
 
 		public async Task<float2[]?> ExecuteFftAsyncSafe(float[] floats, bool keepResultBuffer = false)
 		{
@@ -1544,6 +1806,33 @@ namespace LocalCudaWorkerService.Runtime
 			};
 		}
 
+		public static Task<IEnumerable<T[]>> ConvertStringChunksToTypeAsync<T>(IEnumerable<string?> base64Chunks, int parallelThresholdChars = 16_000_000, int? maxDegreeOfParallelism = null, bool ignoreRemainderBytes = true) where T : unmanaged
+		{
+			var tasks = base64Chunks.Select(b64 => ConvertStringToTypeAsync<T>(b64, parallelThresholdChars, maxDegreeOfParallelism, ignoreRemainderBytes));
+			return Task.WhenAll(tasks).ContinueWith(t => (IEnumerable<T[]>) t.Result);
+		}
+
+		public static Type GetTypeFromString(string typeName)
+		{
+			return typeName.ToLower().Trim() switch
+			{
+				"byte" or "bytes" => typeof(byte),
+				"sbyte" => typeof(sbyte),
+				"short" or "int16" => typeof(short),
+				"ushort" or "uint16" => typeof(ushort),
+				"int" or "int32" => typeof(int),
+				"uint" or "uint32" => typeof(uint),
+				"long" or "int64" => typeof(long),
+				"ulong" or "uint64" => typeof(ulong),
+				"float" or "single" => typeof(float),
+				"double" => typeof(double),
+				_ => typeof(object),
+			};
+		}
+
+
+
+
 		// NEU: Safe Compile Wrapper
 		public Task<string?> CompileStringAsyncSafe(string code)
 			=> this.EnqueueGpu(() =>
@@ -1552,10 +1841,68 @@ namespace LocalCudaWorkerService.Runtime
 				return this.Compiler?.CompileString(code);
 			});
 
+		private static long ParsePositiveLength(string? raw)
+		{
+			if (string.IsNullOrWhiteSpace(raw))
+			{
+				return 0;
+			}
+
+			string s = raw.Trim();
+
+			// Entferne übliche Formatierungen
+			s = s.Replace("_", "").Replace(" ", "").Replace("\u00A0", "");
+
+			// Hex?
+			if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+			{
+				return long.TryParse(s[2..], System.Globalization.NumberStyles.HexNumber,
+					System.Globalization.CultureInfo.InvariantCulture, out long hexVal) && hexVal > 0
+					? hexVal : 0;
+			}
+
+			if (long.TryParse(s, System.Globalization.NumberStyles.Integer,
+				System.Globalization.CultureInfo.InvariantCulture, out long lv) && lv > 0)
+			{
+				return lv;
+			}
+
+			if (double.TryParse(s, System.Globalization.NumberStyles.Float,
+				System.Globalization.CultureInfo.InvariantCulture, out double dv) && dv > 0)
+			{
+				return (long) Math.Floor(dv);
+			}
+
+			// Letzter Versuch: nur Ziffern extrahieren
+			var digits = new string(s.Where(char.IsDigit).ToArray());
+			if (digits.Length > 0 && long.TryParse(digits, out long dv2) && dv2 > 0)
+			{
+				return dv2;
+			}
+
+			return 0;
+		}
+
+		private static int GetElementSize(string? typeName)
+		{
+			return typeName?.ToLowerInvariant() switch
+			{
+				"byte" or "bytes" or "uint8" => sizeof(byte),
+				"int" or "int32" => sizeof(int),
+				"float" or "single" => sizeof(float),
+				"double" => sizeof(double),
+				_ => sizeof(int) // Fallback
+			};
+		}
+
 		// OPTIONALE VERSTÄRKUNG:
 		private bool TryEnsureContext()
 		{
-			if (this.CTX == null) return false;
+			if (this.CTX == null)
+			{
+				return false;
+			}
+
 			try
 			{
 				this.CTX.SetCurrent();
@@ -1571,6 +1918,67 @@ namespace LocalCudaWorkerService.Runtime
 		private void EnsureContextCurrent()
 		{
 			this.TryEnsureContext();
+		}
+
+		public static async Task<string?> ConvertTypeToStringAsync(object[] objects, string? typeName)
+		{
+			// Try get type if name given, else try infer from objects
+			Type? type = null;
+			if (!string.IsNullOrWhiteSpace(typeName))
+			{
+				type = GetTypeFromString(typeName);
+			}
+			else if (objects.Length > 0 && objects[0] != null)
+			{
+				type = objects[0].GetType();
+			}
+			if (type == null)
+			{
+				return null;
+			}
+
+			try
+			{
+				// Boxed Array -> konkretes Array für BlockCopy
+				byte[] raw;
+				if (type == typeof(byte))
+				{
+					raw = (byte[]) (object) objects;
+				}
+				else if (type == typeof(int))
+				{
+					raw = new byte[objects.Length * sizeof(int)];
+					Buffer.BlockCopy((int[]) (object) objects, 0, raw, 0, raw.Length);
+				}
+				else if (type == typeof(long))
+				{
+					raw = new byte[objects.Length * sizeof(long)];
+					Buffer.BlockCopy((long[]) (object) objects, 0, raw, 0, raw.Length);
+				}
+				else if (type == typeof(float))
+				{
+					raw = new byte[objects.Length * sizeof(float)];
+					Buffer.BlockCopy((float[]) (object) objects, 0, raw, 0, raw.Length);
+				}
+				else if (type == typeof(double))
+				{
+					raw = new byte[objects.Length * sizeof(double)];
+					Buffer.BlockCopy((double[]) (object) objects, 0, raw, 0, raw.Length);
+				}
+				else
+				{
+					return null;
+				}
+
+				// Base64 Encode
+				return await Task.Run(() => Convert.ToBase64String(raw));
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine("ConvertTypeToStringAsync error: " + ex.Message);
+				return null;
+
+			}
 		}
 	}
 }

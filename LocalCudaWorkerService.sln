@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.36511.14 d17.14
+VisualStudioVersion = 17.14.36511.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LocalCudaWorkerService.Api", "LocalCudaWorkerService.Api\LocalCudaWorkerService.Api.csproj", "{03F0AC38-FD90-4887-A324-88962C2EBD3F}"
 EndProject
@@ -10,6 +10,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LocalCudaWorkerService.Shared", "LocalCudaWorkerService.Shared\LocalCudaWorkerService.Shared.csproj", "{789E4F16-D0EE-4332-A943-BAAE29B74D18}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LocalCudaWorkerService.Core", "LocalCudaWorkerService.Core\LocalCudaWorkerService.Core.csproj", "{74ADB737-2517-454A-B1D6-B45279FD3934}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LocalCudaWorkerService.Client", "LocalCudaWorkerService.Client\LocalCudaWorkerService.Client.csproj", "{D244E6AF-04E2-437F-A619-8BAA987DB0C1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LocalCudaWorkerService.WebApp", "LocalCudaWorkerService.WebApp\LocalCudaWorkerService.WebApp.csproj", "{F309F48F-76B6-4767-8687-AC2D8F729914}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,6 +37,14 @@ Global
 		{74ADB737-2517-454A-B1D6-B45279FD3934}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{74ADB737-2517-454A-B1D6-B45279FD3934}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{74ADB737-2517-454A-B1D6-B45279FD3934}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D244E6AF-04E2-437F-A619-8BAA987DB0C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D244E6AF-04E2-437F-A619-8BAA987DB0C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D244E6AF-04E2-437F-A619-8BAA987DB0C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D244E6AF-04E2-437F-A619-8BAA987DB0C1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F309F48F-76B6-4767-8687-AC2D8F729914}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F309F48F-76B6-4767-8687-AC2D8F729914}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F309F48F-76B6-4767-8687-AC2D8F729914}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F309F48F-76B6-4767-8687-AC2D8F729914}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

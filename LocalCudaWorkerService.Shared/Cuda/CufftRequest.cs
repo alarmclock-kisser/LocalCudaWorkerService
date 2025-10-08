@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace LocalCudaWorkerService.Shared.Cuda
 {
-	public class CufftRequest
+	public class CuFftRequest
 	{
 		public string? DeviceName { get; set; } = null;
 

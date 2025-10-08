@@ -1,0 +1,11 @@
+@using System.Reflection
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Routing
+<Router AppAssembly="@typeof(Program).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="@(routeData)" />
+    </Found>
+    <NotFound>
+        <h1>Not found</h1>
+    </NotFound>
+</Router>

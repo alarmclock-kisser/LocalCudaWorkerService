@@ -72,7 +72,14 @@ namespace LocalCudaWorkerService.Runtime
 		// Methods: Dispose & Free
 		public void Dispose()
 		{
-			this.CTX.SetCurrent();
+			try
+			{
+				//this.CTX.SetCurrent();
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine(ex);
+			}
 			CudaService.Log($"Disposing CudaRegister with {this.RegisteredMemoryObjects} registered memory objects and {this.streams.Count} streams ...");
 
 			// Free every CudaMem object

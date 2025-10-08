@@ -13,7 +13,11 @@ namespace LocalCudaWorkerService.Shared.Cuda
 		public string DeviceName { get; set; } = string.Empty;
 		public bool Initialized { get; set; } = false;
 
+		public IEnumerable<CudaDeviceInfo> AvailableDevices { get; set; } = [];
+
 		public CudaUsageInfo UsageInfo { get; set; } = new();
+
+		public string? ErrorMessage { get; set; } = null;
 
 		public CudaStatusInfo()
 		{
@@ -31,10 +35,11 @@ namespace LocalCudaWorkerService.Shared.Cuda
 			this.DeviceName = service.SelectedDevice;
 			this.Initialized = service.Initialized;
 			this.UsageInfo = new CudaUsageInfo(service.Register);
+
+			this.AvailableDevices = Enumerable.Range(0, service.Devices.Count)
+				.Select(i => new CudaDeviceInfo(service, i))
+				.ToList();
 		}
-
-
-
 
 
 

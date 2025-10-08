@@ -1,0 +1,192 @@
+@page "/"
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@using Radzen
+@using Radzen.Blazor
+@using LocalCudaWorkerService.Shared
+@using LocalCudaWorkerService.Client
+@inject LocalApiClient Api
+@inject AppConfiguration Config
+@inject NotificationService Notifications
+@inject IJSRuntime JS
+@inject DialogService DialogService
+
+<PageTitle>Worker Status</PageTitle>
+
+@if (ViewModel == null)
+{
+    <div style="padding:1rem;">Loading...</div>
+}
+else
+{
+    <RadzenCard Style="max-width:720px;margin:1.5rem auto;padding:1rem;">
+        <div class="row">
+            <div class="col-md-8">
+                <h3>Local CUDA Worker</h3>
+                <RadzenTextArea @bind-Value="ViewModel.StatusText" ReadOnly="true" Style="width:100%;height:5rem;" />
+
+                <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;">
+                    <RadzenButton Text="@ViewModel.ButtonText"
+                                  Click="@(async () => await ToggleRegister())"
+                                  Style=@($"background-color:{ViewModel.ButtonColor};color:white;border:none;min-width:150px;")
+                                  Disabled="@( (!ViewModel.CanRegister && !ViewModel.IsRegistered) || ViewModel.IsLoading )" />
+
+                    <div style="margin-left:1rem;color:#666;font-size:0.9rem;">
+                        <div>Last checked: @ViewModel.LastChecked</div>
+                        <div>Refresh interval: @Math.Round(Config.RefreshIntervalSeconds) s</div>
+                        <div>Latency: @ViewModel.LatencyMs ms</div>
+                    </div>
+                </div>
+
+                <RadzenPanel Toggleable="true" Collapsed="true" Style="margin-top:1rem;">
+                    <HeaderTemplate>
+                        Main Server URL
+                    </HeaderTemplate>
+                    <ChildContent>
+                        <RadzenTemplateForm Data="@this">
+                            <RadzenFieldset>
+                                <RadzenTextBox @bind-Value="@ViewModel.ServerUrlText" Style="width:100%" Placeholder="https://example.com" />
+                                <div style="margin-top:0.5rem;display:flex;gap:0.5rem;">
+                                    <RadzenButton Text="Connect" Click="@(async () => await ConnectCustom())" ButtonStyle="ButtonStyle.Primary" />
+                                    <RadzenButton Text="Cancel" Click="@(async () => { ViewModel.ServerUrlText = string.Empty; })" ButtonStyle="ButtonStyle.Secondary" />
+                                </div>
+                            </RadzenFieldset>
+                        </RadzenTemplateForm>
+                    </ChildContent>
+                </RadzenPanel>
+            </div>
+
+            <div class="col-md-4">
+                <h5>Logs</h5>
+                <div style="max-height:40vh;overflow:auto;border:1px solid #eee;padding:0.5rem;background:#fafafa;border-radius:4px;">
+                    @if (ViewModel.LogMessages != null && ViewModel.LogMessages.Count > 0)
+                    {
+                        <ul style="padding-left:1rem;margin:0;">
+                            @foreach (var l in ViewModel.LogMessages.Take(Config.MaxLogEntries))
+                            {
+                                <li style="font-family:monospace;font-size:0.85rem;">@l</li>
+                            }
+                        </ul>
+                    }
+                    else
+                    {
+                        <div style="color:#888;">No logs available</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </RadzenCard>
+}
+
+@code {
+    private StatusViewModel? ViewModel;
+    private System.Threading.Timer? timer;
+    private string customServerUrl = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        // Poll every configured seconds
+        timer = new System.Threading.Timer(async _ => await InvokeAsync(async () => await RefreshAsync()), null, 0, (int)(Config.RefreshIntervalSeconds * 1000));
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        ViewModel = new StatusViewModel(Api, Config, Notifications, JS, DialogService);
+
+        await ViewModel.InitializeAsync();
+
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (ViewModel == null)
+            return;
+
+        try
+        {
+            await ViewModel.RefreshStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error checking status: {ex}");
+            ViewModel.IsOnline = false;
+            ViewModel.IsRegistered = false;
+            ViewModel.StatusText = "Offline (error)";
+            ViewModel.LastChecked = DateTime.Now.ToString("HH:mm:ss");
+            ViewModel.ButtonText = "Register";
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleRegister()
+    {
+        if (ViewModel == null)
+            return;
+
+        if (ViewModel.IsLoading)
+            return;
+
+        try
+        {
+            if (ViewModel.IsRegistered)
+            {
+                // Unregister flow
+                var ok = await ViewModel.UnregisterAsync();
+                if (ok)
+                {
+                    ViewModel.StatusText = "Unregistered";
+                    ViewModel.ButtonText = "Register";
+                }
+                else
+                {
+                    ViewModel.StatusText = "Unregister failed";
+                }
+            }
+            else
+            {
+                // Register flow - pass overwrite url if any
+                var overwrite = string.IsNullOrWhiteSpace(ViewModel.ServerUrlText) ? null : ViewModel.ServerUrlText.Trim();
+                var ok = await ViewModel.RegisterAsync(overwrite);
+                if (ok)
+                {
+                    ViewModel.StatusText = "Registered with external server";
+                    ViewModel.ButtonText = "Un-Register";
+                }
+                else
+                {
+                    ViewModel.StatusText = "Registration failed";
+                }
+            }
+        }
+        catch
+        {
+            ViewModel.StatusText = "Registration error";
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ConnectCustom()
+    {
+        if (ViewModel == null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(ViewModel.ServerUrlText))
+            return;
+
+        var overwrite = ViewModel.ServerUrlText.Trim();
+        await ViewModel.RegisterAsync(overwrite);
+
+        ViewModel.ServerUrlText = string.Empty;
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        timer?.Dispose();
+    }
+}

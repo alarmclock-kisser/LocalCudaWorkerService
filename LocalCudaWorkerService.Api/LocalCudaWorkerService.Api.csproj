@@ -19,4 +19,13 @@
     <ProjectReference Include="..\LocalCudaWorkerService.Shared\LocalCudaWorkerService.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="scripts\setup-firewall.bat">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="scripts\setup-firewall.ps1">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

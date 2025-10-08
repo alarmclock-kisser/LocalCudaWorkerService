@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "Full https",
+    "Projects": [
+      {
+        "Path": "LocalCudaWorkerService.Api\\LocalCudaWorkerService.Api.csproj",
+        "Action": "Start",
+        "DebugTarget": "https"
+      },
+      {
+        "Path": "LocalCudaWorkerService.WebApp\\LocalCudaWorkerService.WebApp.csproj",
+        "Action": "Start",
+        "DebugTarget": "https"
+      }
+    ]
+  }
+]

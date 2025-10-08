@@ -21,6 +21,8 @@ namespace LocalCudaWorkerService.Shared.Cuda
 		public string CompilationLog { get; set; } = string.Empty;
 
 
+		public string? ErrorMessage { get; set; } = null;
+
 
 
 		public CudaKernelInfo()

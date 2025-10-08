@@ -29,12 +29,11 @@ namespace LocalCudaWorkerService.Runtime
 
 
 		// Enumerable
-		public CUdeviceptr? this[IntPtr pointer]
+		public CUdeviceptr? this[long index]
 		{
 			get
 			{
-				int index = Array.IndexOf(this.Pointers, pointer);
-				if (index >= 0 && index < this.DevicePointers.Length)
+				if (index >= 0 && index < this.DevicePointers.LongLength)
 				{
 					return this.DevicePointers[index];
 				}
