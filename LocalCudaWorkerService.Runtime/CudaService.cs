@@ -2,6 +2,7 @@
 using LocalCudaWorkerService.Runtime;
 using ManagedCuda;
 using ManagedCuda.BasicTypes;
+using ManagedCuda.VectorTypes;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -1284,6 +1285,11 @@ namespace LocalCudaWorkerService.Runtime
 			};
 
 			// Convert input data if given as typed array
+			object[]? inputData = !string.IsNullOrEmpty(inputDataBase64) && !string.IsNullOrEmpty(inputDataType)
+				? await ConvertStringToTypeAsync(inputDataBase64, inputDataType)
+				: null;
+
+
 
 			// 
 
@@ -1291,6 +1297,237 @@ namespace LocalCudaWorkerService.Runtime
 
 
 			return null;
+		}
+
+		public async Task<float2[]?> ExecuteFftAsyncSafe(float[] floats, bool keepResultBuffer = false)
+		{
+			if (this.Register == null || this.Fourier == null)
+			{
+				return null;
+			}
+
+			// Enqueue on GPU
+			this.EnsureContextCurrent();
+
+			// Push data
+			var mem = await this.Register.PushDataAsync(floats);
+			if (mem == null || mem.IndexPointer == IntPtr.Zero)
+			{
+				return null;
+			}
+
+			// Perform FFT
+			var resultPtr = await this.Fourier.PerformFftAsync(mem.IndexPointer, false);
+			if (resultPtr == IntPtr.Zero)
+			{
+				this.Register.FreeMemory(mem.IndexPointer);
+				return null;
+			}
+
+			// Pull result
+			var result = await this.Register.PullDataAsync<float2>(resultPtr, keepResultBuffer);
+
+			return result;
+		}
+
+		public async Task<float[]?> ExecuteIfftAsyncSafe(float2[] complexes, bool keepResultBuffer = false)
+		{
+			if (this.Register == null || this.Fourier == null)
+			{
+				return null;
+			}
+
+			// Enqueue on GPU
+			this.EnsureContextCurrent();
+
+			// Push data
+			var mem = await this.Register.PushDataAsync(complexes);
+			if (mem == null || mem.IndexPointer == IntPtr.Zero)
+			{
+				return null;
+			}
+
+			// Perform IFFT
+			var resultPtr = await this.Fourier.PerformIfftAsync(mem.IndexPointer, false);
+			if (resultPtr == IntPtr.Zero)
+			{
+				this.Register.FreeMemory(mem.IndexPointer);
+				return null;
+			}
+
+			// Pull result
+			var result = await this.Register.PullDataAsync<float>(resultPtr, keepResultBuffer);
+
+			return result;
+		}
+
+		public async Task<IEnumerable<float2[]>?> ExecuteFftBulkAsyncSafe(IEnumerable<float[]> floatChunks, bool keepResultBuffers = false)
+		{
+			if (this.Register == null || this.Fourier == null)
+			{
+				return null;
+			}
+			
+			// Enqueue on GPU
+			this.EnsureContextCurrent();
+			
+			// Push data
+			var mem = await this.Register.PushChunksAsync(floatChunks);
+			if (mem == null || mem.IndexPointer == IntPtr.Zero)
+			{
+				return null;
+			}
+
+			// Perform FFT
+			var resultPtr = await this.Fourier.PerformFftAsync(mem.IndexPointer, false);
+			if (resultPtr == IntPtr.Zero)
+			{
+				this.Register.FreeMemory(mem.IndexPointer);
+				return null;
+			}
+			
+			// Pull result
+			var results = await this.Register.PullChunksAsync<float2>(resultPtr, keepResultBuffers);
+
+			return results;
+		}
+
+		public async Task<IEnumerable<float[]>?> ExecuteIfftBulkAsyncSafe(IEnumerable<float2[]> complexChunks, bool keepResultBuffers = false)
+		{
+			if (this.Register == null || this.Fourier == null)
+			{
+				return null;
+			}
+			
+			// Enqueue on GPU
+			this.EnsureContextCurrent();
+			
+			// Push data
+			var mem = await this.Register.PushChunksAsync(complexChunks);
+			if (mem == null || mem.IndexPointer == IntPtr.Zero)
+			{
+				return null;
+			}
+			
+			// Perform IFFT
+			var resultPtr = await this.Fourier.PerformIfftAsync(mem.IndexPointer, false);
+			if (resultPtr == IntPtr.Zero)
+			{
+				this.Register.FreeMemory(mem.IndexPointer);
+				return null;
+			}
+			
+			// Pull result
+			var results = await this.Register.PullChunksAsync<float>(resultPtr, keepResultBuffers);
+			
+			return results;
+		}
+
+
+
+
+
+		// Statics
+		public static async Task<T[]> ConvertStringToTypeAsync<T>(string? base64Data, int parallelThresholdChars = 16_000_000, int? maxDegreeOfParallelism = null, bool ignoreRemainderBytes = true) where T : unmanaged
+		{
+			if (string.IsNullOrWhiteSpace(base64Data))
+			{
+				return [];
+			}
+
+			try
+			{
+				// 1) Base64 Decode (synchron, CPU-bound) – optional auslagern
+				// Bei extrem großen Strings im Hintergrund-Thread decodieren
+				byte[] raw = base64Data.Length > parallelThresholdChars
+					? await Task.Run(() => Convert.FromBase64String(base64Data))
+					: Convert.FromBase64String(base64Data);
+
+				if (typeof(T) == typeof(byte))
+				{
+					return (T[]) (object) raw; // Direkt zurück (zero-copy)
+				}
+
+				int typeSize = System.Runtime.InteropServices.Marshal.SizeOf<T>();
+				if (raw.Length < typeSize)
+				{
+					return [];
+				}
+
+				int elementCount = raw.Length / typeSize;
+				int usableBytes = elementCount * typeSize;
+
+				if (!ignoreRemainderBytes && usableBytes != raw.Length)
+				{
+					throw new InvalidOperationException($"Rohdatenlänge ({raw.Length}) nicht durch Elementgröße ({typeSize}) teilbar.");
+				}
+
+				// Klein? -> Singlethread + Array.Copy + Buffer.BlockCopy
+				if (base64Data.Length < parallelThresholdChars)
+				{
+					byte[] usableRaw = new byte[usableBytes];
+					Array.Copy(raw, 0, usableRaw, 0, usableBytes);
+					T[] result = new T[elementCount];
+					Buffer.BlockCopy(usableRaw, 0, result, 0, usableBytes);
+					return result;
+				}
+
+				// Groß: Parallel kopieren (ohne unsafe)
+				T[] resultLarge = new T[elementCount];
+
+				// Partitionierung
+				int logical = maxDegreeOfParallelism ?? Environment.ProcessorCount;
+				int partitionSizeElements = Math.Max(elementCount / (logical * 4), 1024); // Mindestens 1024 Elemente pro Partition
+				int partitionSizeBytes = partitionSizeElements * typeSize;
+
+				var ranges = new List<(int byteStart, int byteLen)>();
+				for (int offset = 0; offset < usableBytes; offset += partitionSizeBytes)
+				{
+					int len = Math.Min(partitionSizeBytes, usableBytes - offset);
+					ranges.Add((offset, len));
+				}
+
+				var po = new ParallelOptions
+				{
+					MaxDegreeOfParallelism = logical
+				};
+
+				Parallel.ForEach(ranges, po, range =>
+				{
+					int elements = range.byteLen / typeSize;
+					int destIndex = range.byteStart / typeSize;
+					Buffer.BlockCopy(raw, range.byteStart, resultLarge, destIndex * typeSize, elements * typeSize);
+				});
+
+				return resultLarge;
+			}
+			catch (FormatException)
+			{
+				return [];
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine("ConvertStringToTypeAsync error: " + ex.Message);
+				return [];
+			}
+		}
+
+		public static Task<object[]> ConvertStringToTypeAsync(string? base64Data, string typeName)
+		{
+			return typeName.ToLower() switch
+			{
+				"byte" or "bytes" => ConvertStringToTypeAsync<byte>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"sbyte" => ConvertStringToTypeAsync<sbyte>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"short" or "int16" => ConvertStringToTypeAsync<short>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"ushort" or "uint16" => ConvertStringToTypeAsync<ushort>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"int" or "int32" => ConvertStringToTypeAsync<int>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"uint" or "uint32" => ConvertStringToTypeAsync<uint>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"long" or "int64" => ConvertStringToTypeAsync<long>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"ulong" or "uint64" => ConvertStringToTypeAsync<ulong>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"float" or "single" => ConvertStringToTypeAsync<float>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				"double" => ConvertStringToTypeAsync<double>(base64Data).ContinueWith(t => t.Result.Cast<object>().ToArray()),
+				_ => Task.FromResult<object[]>([])
+			};
 		}
 
 	}

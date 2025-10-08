@@ -79,13 +79,13 @@ namespace LocalCudaWorkerService.Runtime
 					return;
 				}
 
-				long bins = (long)channels * chunkSize;
+				long bins = (long) channels * chunkSize;
 				if (bins <= 0)
 				{
 					return;
 				}
 
-				IntPtr len = (nint)bins;
+				IntPtr len = (nint) bins;
 				var prev = this.Register.AllocateSingle<float>(len);
 				var accum = this.Register.AllocateSingle<float>(len);
 				if (prev == null || accum == null)
@@ -97,10 +97,10 @@ namespace LocalCudaWorkerService.Runtime
 				byte[] zero = new byte[bins * sizeof(float)];
 				unsafe
 				{
-					fixed(byte* zp = zero)
+					fixed (byte* zp = zero)
 					{
-						var res1 = ManagedCuda.DriverAPINativeMethods.SynchronousMemcpy_v2.cuMemcpyHtoD_v2(prev.DevicePointers[0], (IntPtr)zp, (SizeT)zero.Length);
-						var res2 = ManagedCuda.DriverAPINativeMethods.SynchronousMemcpy_v2.cuMemcpyHtoD_v2(accum.DevicePointers[0], (IntPtr)zp, (SizeT)zero.Length);
+						var res1 = ManagedCuda.DriverAPINativeMethods.SynchronousMemcpy_v2.cuMemcpyHtoD_v2(prev.DevicePointers[0], (IntPtr) zp, (SizeT) zero.Length);
+						var res2 = ManagedCuda.DriverAPINativeMethods.SynchronousMemcpy_v2.cuMemcpyHtoD_v2(accum.DevicePointers[0], (IntPtr) zp, (SizeT) zero.Length);
 						if (res1 != CUResult.Success || res2 != CUResult.Success)
 						{
 							CudaService.Log("Phase state zero fill failed (non-fatal)");
@@ -119,12 +119,12 @@ namespace LocalCudaWorkerService.Runtime
 			var k = this.Kernel!;
 			int totalBins = chunkSize * channels; // if channels==1 falls back to chunkSize
 			uint blockSize = 256;
-			uint gridSize = (uint)((totalBins + blockSize - 1) / blockSize);
+			uint gridSize = (uint) ((totalBins + blockSize - 1) / blockSize);
 			k.BlockDimensions = new dim3(blockSize, 1, 1);
 			k.GridDimensions = new dim3(gridSize, 1, 1);
 
 			// Allocate one reusable output frame buffer
-			var tempOut = this.Register.AllocateSingle<float2>((nint)chunkSize);
+			var tempOut = this.Register.AllocateSingle<float2>((nint) chunkSize);
 			if (tempOut == null)
 			{
 				CudaService.Log("Failed to allocate temporary output frame buffer.");
@@ -168,8 +168,8 @@ namespace LocalCudaWorkerService.Runtime
 
 		private IntPtr ExecuteMerged2D(IntPtr fftIndexPtr, CudaMem fftMem, double factor, int chunkSize, int overlapSize, int sampleRate)
 		{
-			var contiguousIn = this.Register.AllocateSingle<float2>((nint)((long)fftMem.Count * chunkSize));
-			var contiguousOut = this.Register.AllocateSingle<float2>((nint)((long)fftMem.Count * chunkSize));
+			var contiguousIn = this.Register.AllocateSingle<float2>((nint) ((long) fftMem.Count * chunkSize));
+			var contiguousOut = this.Register.AllocateSingle<float2>((nint) ((long) fftMem.Count * chunkSize));
 			if (contiguousIn == null || contiguousOut == null)
 			{
 				CudaService.Log("Failed to allocate contiguous buffers.");
@@ -189,8 +189,8 @@ namespace LocalCudaWorkerService.Runtime
 				var k = this.Kernel!;
 				int bins = chunkSize;
 				uint bx = 32; uint by = 4;
-				uint gx = (uint)((bins + bx - 1) / bx);
-				uint gy = (uint)((fftMem.Count + by - 1) / by);
+				uint gx = (uint) ((bins + bx - 1) / bx);
+				uint gy = (uint) ((fftMem.Count + by - 1) / by);
 				k.BlockDimensions = new dim3(bx, by);
 				k.GridDimensions = new dim3(gx, gy);
 				object[] args =
@@ -273,7 +273,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 			if (chunkSize <= 0)
 			{
-				chunkSize = (int)fftMem.Lengths[0];
+				chunkSize = (int) fftMem.Lengths[0];
 			}
 
 			bool uniform = fftMem.Lengths.All(l => l.ToInt64() == fftMem.Lengths[0].ToInt64());
@@ -348,7 +348,7 @@ namespace LocalCudaWorkerService.Runtime
 				return IntPtr.Zero;
 			}
 			CudaService.Log($"Localized input memory: {mem.Count} chunks, total length: {mem.TotalLength}, total size: {mem.TotalSize} bytes.");
-			
+
 			var paramList = this.SortKernelParameters(kernel, indexPointer, chunkSize, oberlapSize, sampleRate, channels, additionalArgs ?? []);
 			if (paramList.Length == 0)
 			{
@@ -495,6 +495,46 @@ namespace LocalCudaWorkerService.Runtime
 		public Task<IntPtr> ExecuteGenericAudioKernelAsync(IntPtr pointer, string kernel, int chunkSize, int overlapSize, int sampleRate, int channels = 0, Dictionary<string, object>? additionalArgs = null)
 		{
 			return Task.Run(() => this.ExecuteGenericAudioKernel(pointer, kernel, chunkSize, overlapSize, sampleRate, channels, additionalArgs));
+		}
+
+
+
+		// Generic exec
+		public IntPtr ExecuteGenericKernel(IntPtr indexPointer, string kernel, Dictionary<string, object> args)
+		{
+			this.Compiler.LoadKernel(kernel);
+			if (this.Kernel == null)
+			{
+				CudaService.Log("Kernel not loaded or invalid.");
+				return indexPointer;
+			}
+
+			var mem = this.Register[indexPointer];
+			if (mem == null || mem.IndexPointer == IntPtr.Zero || mem.IndexLength == IntPtr.Zero)
+			{
+				CudaService.Log("Memory not found or invalid pointer.");
+				return IntPtr.Zero;
+			}
+			
+			CudaService.Log($"Localized input memory: {mem.Count} chunks, total length: {mem.TotalLength}, total size: {mem.TotalSize} bytes.");
+			
+			var paramList = this.SortKernelParameters(kernel, indexPointer, 0, 0, 0, 0, args);
+			if (paramList.Length == 0)
+			{
+				CudaService.Log("No parameters sorted for kernel execution.");
+				return indexPointer;
+			}
+
+			try
+			{
+				this.Kernel.Run(paramList);
+				return indexPointer;
+			}
+			catch (Exception ex)
+			{
+				CudaService.Log(ex, "Generic kernel execution failed.");
+				return indexPointer;
+			}
 		}
 	}
 }
