@@ -1,0 +1,6 @@
+@LocalCudaWorkerService.Api_HostAddress = http://localhost:5197
+
+GET {{LocalCudaWorkerService.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
