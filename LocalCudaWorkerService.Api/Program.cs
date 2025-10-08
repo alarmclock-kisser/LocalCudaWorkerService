@@ -27,8 +27,8 @@ namespace LocalCudaWorkerService.Api
 				o.SwaggerDoc("v1", new OpenApiInfo
 				{
 					Version = "v1",
-					Title = "OOCL.Image API",
-					Description = "API + WebApp using OpenCL Kernels for image generation etc.",
+					Title = "LocalCudaWorkerService API",
+					Description = "ASP.NET REST-API using CUDA as an online worker for executing kernels vie HTTP.",
 					TermsOfService = new Uri("https://example.com/terms"),
 					Contact = new OpenApiContact { Name = "github: alarmclock-kisser", Email = "marcel.king91299@gmail.com" }
 				});
@@ -69,7 +69,7 @@ namespace LocalCudaWorkerService.Api
 			app.UseSwaggerUI(c =>
 			{
 				// Explizit relative Referenz (./) schützt vor Root-Fehlinterpretation auf manchen Clients/Caches
-				c.SwaggerEndpoint("./v1/swagger.json", "OOCL.Image API v1");
+				c.SwaggerEndpoint("./v1/swagger.json", "LocalCudaWorkerService API v1");
 				c.RoutePrefix = "swagger";
 				c.DisplayRequestDuration();
 			});

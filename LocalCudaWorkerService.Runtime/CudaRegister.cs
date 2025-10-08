@@ -22,13 +22,13 @@ namespace LocalCudaWorkerService.Runtime
 
 
 		// Properties
-		public long TotalFree => this.CTX.GetFreeDeviceMemorySize();
-		public long TotalMemory => this.CTX.GetTotalDeviceMemorySize();
+		public long TotalFree => this.GetTotalFreeMemory();
+		public long TotalMemory => this.GetTotalMemory();
 		public long TotalAllocated => this.memory.Values.Sum(m => m.TotalSize);
 		public int RegisteredMemoryObjects => this.memory.Count;
 		public int ThreadsActive => this.streams.Count(s => s.Value > 0);
 		public int ThreadsIdle => this.streams.Count(s => s.Value <= 0);
-		public int MaxThreads => this.CTX.GetDeviceInfo().MaxThreadsPerMultiProcessor;
+		public int MaxThreads => this.GetProcessorsCount();
 
 
 		// Constructor
@@ -101,6 +101,25 @@ namespace LocalCudaWorkerService.Runtime
 			CudaService.Log($"CudaRegister disposed.");
 
 			GC.SuppressFinalize(this);
+		}
+
+		public long GetTotalMemory()
+		{
+			this.CTX.SetCurrent();
+			return this.CTX.GetTotalDeviceMemorySize();
+		}
+
+		public long GetTotalFreeMemory()
+		{
+			this.CTX.SetCurrent();
+			long free = this.CTX.GetFreeDeviceMemorySize();
+			return free;
+		}
+
+		public int GetProcessorsCount()
+		{
+			this.CTX.SetCurrent();
+			return this.CTX.GetDeviceInfo().MultiProcessorCount;
 		}
 
 		public long FreeMemory(CudaMem mem)

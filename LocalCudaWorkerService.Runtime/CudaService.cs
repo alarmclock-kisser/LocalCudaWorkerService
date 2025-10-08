@@ -31,6 +31,7 @@ namespace LocalCudaWorkerService.Runtime
 		private volatile bool gpuRunning;
 		private readonly object ctxInitLock = new();
 		private readonly SemaphoreSlim gpuLock = new(1, 1);
+		private readonly object initLock = new(); // NEU
 
 		private PrimaryContext? CTX;
 		private CUdevice? DEV;
@@ -143,11 +144,6 @@ namespace LocalCudaWorkerService.Runtime
 
 
 		// Thread privates
-		private void EnsureContextCurrent()
-		{
-			this.CTX?.SetCurrent();
-		}
-
 		private void StartGpuThread()
 		{
 			if (this.gpuRunning) return;
@@ -395,38 +391,56 @@ namespace LocalCudaWorkerService.Runtime
 		// Methods: Initialize
 		public void Initialize(int index = 0)
 		{
-			if (this.Initialized)
+			lock (this.initLock)
 			{
-				this.Dispose();
-			}
+				if (this.Initialized && this.Index == index)
+				{
+					Log($"CUDA bereits initialisiert (Device Index {index}).", "", 0, "CUDA-Service", true);
+					return;
+				}
 
-			if (index < 0 || index >= this.Devices.Count)
-			{
-				return;
-			}
+				if (this.Initialized)
+				{
+					this.Dispose();
+				}
 
-			try
-			{
-				this.Index = index;
-				this.DEV = this.Devices.Keys.ElementAt(index);
-				this.CTX = new PrimaryContext(this.DEV.Value);
+				if (index < 0 || index >= this.Devices.Count)
+				{
+					throw new ArgumentOutOfRangeException(nameof(index), $"Ungültiger Device-Index {index}. Verfügbar: 0 .. {this.Devices.Count - 1}");
+				}
 
-				this.MaxThreads = this.CTX.GetDeviceInfo().MaxThreadsPerMultiProcessor;
+				try
+				{
+					this.Index = index;
+					this.DEV = this.Devices.Keys.ElementAt(index);
 
-				this.CTX.SetCurrent();
+					// Context anlegen (hier noch im aufrufenden Thread)
+					this.CTX = new PrimaryContext(this.DEV.Value);
 
-				Log($"Initialized CUDA service for device: {this.SelectedDevice} (Index: {this.Index})", "", 0, "CUDA-Service", true);
+					// Worker-Thread starten (bindet den Context dort)
+					this.StartGpuThread();
 
-				this.Register = new CudaRegister(this.CTX);
-				this.Fourier = new CudaFourier(this.CTX, this.Register);
-				this.Compiler = new CudaCompiler(this.CTX);
-				this.Executioner = new CudaExecutioner(this.CTX, this.Register, this.Fourier, this.Compiler);
-			}
-			catch (Exception ex)
-			{
-				Log(ex, "Failed to initialize CUDA service", 0, "CUDA-Service", true);
-				this.Dispose();
-				return;
+					// Konstruktion aller GPU-Objekte AUF dem GPU-Thread erzwingen
+					var buildTask = this.EnqueueGpu(() =>
+					{
+						this.EnsureContextCurrent();
+						this.MaxThreads = this.CTX!.GetDeviceInfo().MaxThreadsPerMultiProcessor;
+
+						this.Register = new CudaRegister(this.CTX);
+						this.Fourier = new CudaFourier(this.CTX, this.Register);
+						this.Compiler = new CudaCompiler(this.CTX);
+						this.Executioner = new CudaExecutioner(this.CTX, this.Register, this.Fourier, this.Compiler);
+
+						Log($"Initialized CUDA service for device: {this.SelectedDevice} (Index: {this.Index})", "", 0, "CUDA-Service", true);
+					});
+
+					buildTask.GetAwaiter().GetResult();
+				}
+				catch (Exception ex)
+				{
+					Log(ex, "Failed to initialize CUDA service", 0, "CUDA-Service", true);
+					this.Dispose();
+				}
 			}
 		}
 
@@ -1325,7 +1339,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 
 			// Pull result
-			var result = await this.Register.PullDataAsync<float2>(resultPtr, keepResultBuffer);
+			var result = this.Register.PullData<float2>(resultPtr, keepResultBuffer);
 
 			return result;
 		}
@@ -1356,7 +1370,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 
 			// Pull result
-			var result = await this.Register.PullDataAsync<float>(resultPtr, keepResultBuffer);
+			var result = this.Register.PullData<float>(resultPtr, keepResultBuffer);
 
 			return result;
 		}
@@ -1387,7 +1401,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 			
 			// Pull result
-			var results = await this.Register.PullChunksAsync<float2>(resultPtr, keepResultBuffers);
+			var results = this.Register.PullChunks<float2>(resultPtr, keepResultBuffers);
 
 			return results;
 		}
@@ -1418,7 +1432,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 			
 			// Pull result
-			var results = await this.Register.PullChunksAsync<float>(resultPtr, keepResultBuffers);
+			var results = this.Register.PullChunks<float>(resultPtr, keepResultBuffers);
 			
 			return results;
 		}
@@ -1530,5 +1544,33 @@ namespace LocalCudaWorkerService.Runtime
 			};
 		}
 
+		// NEU: Safe Compile Wrapper
+		public Task<string?> CompileStringAsyncSafe(string code)
+			=> this.EnqueueGpu(() =>
+			{
+				this.EnsureContextCurrent();
+				return this.Compiler?.CompileString(code);
+			});
+
+		// OPTIONALE VERSTÄRKUNG:
+		private bool TryEnsureContext()
+		{
+			if (this.CTX == null) return false;
+			try
+			{
+				this.CTX.SetCurrent();
+				return true;
+			}
+			catch (Exception ex)
+			{
+				Log(ex, "Context SetCurrent fehlgeschlagen", 0, "CUDA-Service", true);
+				return false;
+			}
+		}
+
+		private void EnsureContextCurrent()
+		{
+			this.TryEnsureContext();
+		}
 	}
 }
