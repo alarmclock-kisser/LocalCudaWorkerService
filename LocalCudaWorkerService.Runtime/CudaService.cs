@@ -1,8 +1,9 @@
-﻿using ManagedCuda;
-using ManagedCuda.BasicTypes;
-using LocalCudaWorkerService.Core;
+﻿using LocalCudaWorkerService.Core;
 using LocalCudaWorkerService.Runtime;
+using ManagedCuda;
+using ManagedCuda.BasicTypes;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.Design;
@@ -10,8 +11,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Threading.Tasks;
 using System.Text.RegularExpressions; // added
+using System.Threading.Tasks;
 
 namespace LocalCudaWorkerService.Runtime
 {
@@ -24,6 +25,12 @@ namespace LocalCudaWorkerService.Runtime
 		public CudaExecutioner? Executioner;
 
 		// Fields
+		private Thread? _gpuThread;
+		private readonly BlockingCollection<Delegate> _gpuQueue = [];
+		private volatile bool gpuRunning;
+		private readonly object ctxInitLock = new();
+		private readonly SemaphoreSlim gpuLock = new(1, 1);
+
 		private PrimaryContext? CTX;
 		private CUdevice? DEV;
 
@@ -92,7 +99,7 @@ namespace LocalCudaWorkerService.Runtime
 			}
 
 			// Initialize
-			if (index > 0)
+			if (index >= 0)
 			{
 				this.Initialize(index);
 			}
@@ -105,6 +112,12 @@ namespace LocalCudaWorkerService.Runtime
 		// Method: Dispose
 		public void Dispose()
 		{
+			this._gpuQueue.CompleteAdding();
+			if (this._gpuThread != null && this._gpuThread.IsAlive)
+			{
+				this._gpuThread.Join();
+			}
+
 			this.Index = -1;
 
 			this.Devices = this.GetDevices();
@@ -125,6 +138,91 @@ namespace LocalCudaWorkerService.Runtime
 			this.Compiler = null;
 			this.Executioner?.Dispose();
 			this.Executioner = null;
+		}
+
+
+		// Thread privates
+		private void EnsureContextCurrent()
+		{
+			this.CTX?.SetCurrent();
+		}
+
+		private void StartGpuThread()
+		{
+			if (this.gpuRunning) return;
+			this.gpuRunning = true;
+			this._gpuThread = new Thread(() =>
+			{
+				try
+				{
+					// Kontext einmalig auf Worker-Thread binden
+					this.EnsureContextCurrent();
+
+					foreach (var work in this._gpuQueue.GetConsumingEnumerable())
+					{
+						switch (work)
+						{
+							case Action a:
+								a();
+								break;
+							case Func<Task> f:
+								// Falls doch async zurück (selten nötig) -> blockend ausführen
+								f().GetAwaiter().GetResult();
+								break;
+							default:
+								break;
+						}
+					}
+				}
+				finally
+				{
+					this.gpuRunning = false;
+				}
+			})
+			{
+				IsBackground = true,
+				Name = "CudaWorkerThread"
+			};
+			this._gpuThread.Start();
+		}
+
+		private Task<T> EnqueueGpu<T>(Func<T> fn)
+		{
+			var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+			this._gpuQueue.Add(new Action(() =>
+			{
+				try
+				{
+					// Kontext redundanterweise sichern (falls zukünftige Änderungen)
+					this.EnsureContextCurrent();
+					var result = fn();
+					tcs.SetResult(result);
+				}
+				catch (Exception ex)
+				{
+					tcs.SetException(ex);
+				}
+			}));
+			return tcs.Task;
+		}
+
+		private Task EnqueueGpu(Action action)
+		{
+			var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+			this._gpuQueue.Add(new Action(() =>
+			{
+				try
+				{
+					this.EnsureContextCurrent();
+					action();
+					tcs.SetResult();
+				}
+				catch (Exception ex)
+				{
+					tcs.SetException(ex);
+				}
+			}));
+			return tcs.Task;
 		}
 
 
@@ -960,7 +1058,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return obj;
 			}
-			
+
 			// Move audio to device if not already there
 			if (!obj.OnDevice)
 			{
@@ -970,7 +1068,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return obj;
 			}
-			
+
 			int overlapSize = (int) (chunkSize * overlap);
 			Dictionary<string, object> arguments = [];
 			if (argNames != null && argValues != null && argNames.Length == argValues.Length)
@@ -995,7 +1093,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				this.MoveAudio(obj, chunkSize, overlap);
 			}
-			
+
 			return obj;
 		}
 
@@ -1005,7 +1103,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return obj;
 			}
-			
+
 			// Move audio to device if not already there
 			if (!obj.OnDevice)
 			{
@@ -1015,7 +1113,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return obj;
 			}
-			
+
 			int overlapSize = (int) (chunkSize * overlap);
 			Dictionary<string, object> arguments = [];
 			if (argNames != null && argValues != null && argNames.Length == argValues.Length)
@@ -1032,7 +1130,7 @@ namespace LocalCudaWorkerService.Runtime
 			obj.IsProcessing = true;
 			result = await this.Executioner.ExecuteGenericAudioKernelAsync(obj.Pointer, kernel, chunkSize, overlapSize, obj.SampleRate, obj.Channels, arguments);
 			obj.IsProcessing = false;
-			
+
 			sw.Stop();
 			obj["kernel"] = sw.Elapsed.TotalMilliseconds;
 			if (result != IntPtr.Zero)
@@ -1044,7 +1142,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				await this.MoveAudioAsync(obj, chunkSize, overlap);
 			}
-			
+
 			return obj;
 		}
 
@@ -1060,7 +1158,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return null;
 			}
-			
+
 			try
 			{
 				return await File.ReadAllTextAsync(cuPath);
@@ -1074,7 +1172,7 @@ namespace LocalCudaWorkerService.Runtime
 
 		public async Task<string?> DeleteKernelAsync(string kernelName)
 		{
-					if (this.Compiler == null)
+			if (this.Compiler == null)
 			{
 				return null;
 			}
@@ -1083,7 +1181,7 @@ namespace LocalCudaWorkerService.Runtime
 			{
 				return null;
 			}
-			
+
 			try
 			{
 				await Task.Run(() => File.Delete(cuPath));
@@ -1129,5 +1227,71 @@ namespace LocalCudaWorkerService.Runtime
 			properties["MaxTexture3D"] = $"[{props.MaximumTexture3DWidth}, {props.MaximumTexture3DHeight}, {props.MaximumTexture3DDepth}]";
 			return properties;
 		}
+
+
+		public async Task<AudioObj> MoveAudioAsyncSafe(AudioObj obj, int chunkSize = 4096, float overlap = 0.5f)
+			=> await this.EnqueueGpu(() => this.MoveAudio(obj, chunkSize, overlap));
+
+		public async Task<AudioObj> FourierTransformAsyncSafe(AudioObj obj, int chunkSize = 16384, float overlap = 0.5f, bool keep = false, bool autoPull = false, bool autoNormalize = false, bool asyncFourier = false)
+			=> await this.EnqueueGpu(() => this.FourierTransform(obj, chunkSize, overlap, keep, autoPull, autoNormalize, asyncFourier));
+
+		public async Task<AudioObj> TimeStretchAsyncSafe(AudioObj obj, string kernel = "timestretch_complexes01", double factor = 1.0, int chunkSize = 16384, float overlap = 0.5f, int maxStreams = 1, bool keep = false, bool asMany = false, bool autoNormalize = false)
+			=> await this.EnqueueGpu(() => this.TimeStretch(obj, kernel, factor, chunkSize, overlap, keep, autoNormalize));
+
+		public async Task<AudioObj> ExecuteAudioKernelAsyncSafe(AudioObj obj, string kernel, int chunkSize = 16384, float overlap = 0.5f, string[]? argNames = null, object[]? argValues = null, float autoNormalize = 0.0f)
+			=> await this.EnqueueGpu(() => this.ExecuteAudioKernel(obj, kernel, chunkSize, overlap, argNames, argValues, autoNormalize));
+
+
+		public async Task<string?> ExecuteGenericKernelAsyncSafe(string kernelCode, string? inputDataBase64 = null, string? inputDataType = null, string outputDataLength = "0", string? outputDataType = null, Dictionary<string, string>? parameters = null, int workDimension = 1)
+		{
+			// Try compile code
+			var compileResult = this.Compiler?.CompileString(kernelCode);
+			if (string.IsNullOrEmpty(compileResult) || compileResult.Contains(' '))
+			{
+				Log("Kernel compilation failed.", "'" + compileResult + "'", 0, "CUDA-Service", true);
+				return compileResult;
+			}
+
+			// Parse output data length and try get types
+			long outLength = long.TryParse(outputDataLength, out long len) ? len : 0;
+			Type? outType = outputDataType?.ToLower().Trim() switch
+			{
+				"byte" or "uint8" or "uchar" => typeof(byte),
+				"sbyte" or "int8" => typeof(sbyte),
+				"short" or "int16" => typeof(short),
+				"ushort" or "uint16" => typeof(ushort),
+				"int" or "int32" => typeof(int),
+				"uint" or "uint32" => typeof(uint),
+				"long" or "int64" => typeof(long),
+				"ulong" or "uint64" => typeof(ulong),
+				"float" or "float32" => typeof(float),
+				"double" or "float64" => typeof(double),
+				_ => null,
+			};
+			Type? inType = inputDataType?.ToLower().Trim() switch
+			{
+				"byte" or "uint8" or "uchar" => typeof(byte),
+				"sbyte" or "int8" => typeof(sbyte),
+				"short" or "int16" => typeof(short),
+				"ushort" or "uint16" => typeof(ushort),
+				"int" or "int32" => typeof(int),
+				"uint" or "uint32" => typeof(uint),
+				"long" or "int64" => typeof(long),
+				"ulong" or "uint64" => typeof(ulong),
+				"float" or "float32" => typeof(float),
+				"double" or "float64" => typeof(double),
+				_ => null,
+			};
+
+			// Convert input data if given as typed array
+
+			// 
+
+
+
+
+			return null;
+		}
+
 	}
 }
